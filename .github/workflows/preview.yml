@@ -1,0 +1,55 @@
+# Preview for review (plan.md § 3, ADR 0003). Builds /digest/<night> as one HTML file and
+# deploys it to GitHub Pages. The page is never committed. Its banner shows the repo secret
+# LANE_MARKER; clear the secret and run again to take the marker off the same link (§ 4).
+name: preview
+
+on:
+  workflow_dispatch:
+    inputs:
+      night:
+        description: Night to preview (YYYY-MM-DD)
+        default: '2026-10-28'
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Save the page
+        env:
+          LANE_MARKER: ${{ secrets.LANE_MARKER }}
+          NIGHT: ${{ inputs.night }}
+        run: |
+          printf 'LANE_ID=lane-07\nLANE_MARKER=%s\nPORT=8787\n' "$LANE_MARKER" > .env
+          pnpm start > server.log 2>&1 &
+          for i in $(seq 1 60); do curl -sf localhost:8787/health > /dev/null && break; sleep 0.5; done
+          mkdir -p _preview
+          curl -sf "localhost:8787/digest/$NIGHT" -o _preview/index.html
+          rm .env
+          grep -o 'class="marker">[^<]*' _preview/index.html | sed 's/.*>//; s/^\(..\).*/marker: \1…/'
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _preview
+          retention-days: 1
+      - id: deploy
+        uses: actions/deploy-pages@v4
